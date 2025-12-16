@@ -184,7 +184,6 @@ export const generateWebsiteCodeStream = async (
   config: { font: string; libs: string[]; designSystem?: DesignSystem } = { font: 'Cairo', libs: [] }
 ): Promise<AsyncIterable<string>> => {
   const ai = getClient();
-  const contextCode = currentCode ? truncateBase64InContext(currentCode) : '';
   const parts: any[] = [];
   
   if (visualContext.length > 0) {
@@ -192,52 +191,78 @@ export const generateWebsiteCodeStream = async (
     parts.push({ text: "Replicate this design EXACTLY." });
   }
 
-  // Inject Design System into prompt
-  const designPrompt = config.designSystem ? `
-  Graphic Designer Specs (STRICTLY FOLLOW THIS):
-  - Primary Color: ${config.designSystem.colorPalette.primary}
-  - Background: ${config.designSystem.colorPalette.background}
-  - Style: ${config.designSystem.style}
-  - Layout: ${config.designSystem.layoutStructure}
-  ` : '';
+  let systemPrompt = '';
 
-  const systemPrompt = `
-  You are a Senior Frontend Engineer & UI Specialist.
-  Goal: Build a HIGH-END, MULTI-SECTION SINGLE PAGE APPLICATION (SPA).
+  if (currentCode) {
+      // --- EDIT MODE PROMPT ---
+      const contextCode = truncateBase64InContext(currentCode);
+      systemPrompt = `
+      You are an Expert Frontend Code Refactorer & Editor.
+      
+      TASK: Update the existing website code based ONLY on the user request.
+      USER REQUEST: "${prompt}"
+
+      RULES:
+      1. **TARGETED EDITING:** Only modify the specific section, color, or logic requested. Do NOT rebuild the whole site from scratch unless asked.
+      2. **PRESERVE:** Keep the existing layout, content, and style unless it conflicts with the request.
+      3. **OUTPUT:** You MUST return the FULL, VALID, SINGLE HTML FILE containing the update. Do NOT return just the snippet.
+      4. **LIBS:** Keep existing libraries (Tailwind, FontAwesome, etc.).
+      
+      EXISTING CODE (Context):
+      ${contextCode}
+
+      Return ONLY raw HTML code.
+      `;
+  } else {
+      // --- NEW BUILD PROMPT ---
+      // Inject Design System into prompt
+      const designPrompt = config.designSystem ? `
+      Graphic Designer Specs (STRICTLY FOLLOW THIS):
+      - Primary Color: ${config.designSystem.colorPalette.primary}
+      - Background: ${config.designSystem.colorPalette.background}
+      - Style: ${config.designSystem.style}
+      - Layout: ${config.designSystem.layoutStructure}
+      ` : '';
+
+      systemPrompt = `
+      You are a Senior Frontend Engineer & UI Specialist.
+      Goal: Build a HIGH-END, MULTI-SECTION SINGLE PAGE APPLICATION (SPA).
+      
+      ${designPrompt}
+
+      CRITICAL REQUIREMENTS:
+      1. **ARCHITECTURE (SPA):**
+         - Create a complete website in a SINGLE HTML file.
+         - Include a Fixed/Sticky Navbar with links (Home, About, Services, Portfolio, Contact).
+         - **Navigation Logic (CRITICAL):** 
+           - Give every Section a unique ID (e.g., id="home", id="about").
+           - Give Navbar Links hrefs matching IDs (e.g., href="#home").
+           - **JavaScript:** Write robust code to handle click events on nav links. 
+             - \`e.preventDefault()\` MUST be used.
+             - Hide ALL sections (add 'hidden' class).
+             - Show TARGET section (remove 'hidden' class).
+             - Update 'active' class on navbar links.
+      
+      2. **MOBILE MENU (CRITICAL):**
+         - Navbar MUST have a button with \`id="mobile-menu-btn"\` (Hamburger icon) visible only on small screens.
+         - A Menu container with \`id="mobile-menu"\` containing the links, hidden by default.
+         - **JavaScript:** Write code to Toggle the 'hidden' class on \`#mobile-menu\` when \`#mobile-menu-btn\` is clicked.
+      
+      3. **DESIGN & VISUALS:**
+         - Use Tailwind CSS.
+         - Typography: Google Fonts '${config.designSystem?.typography.headingFont || config.font}'.
+         - Ensure High Contrast and Accessibility.
+
+      4. **CONTENT:**
+         - REALISTIC ARABIC/ENGLISH CONTENT (Based on user prompt language).
+         - Hero Section: Big bold headline, CTA buttons.
+         - Footer: Complete with links, social icons.
+
+      Return ONLY raw HTML code.
+      User Request: ${prompt}
+      `;
+  }
   
-  ${designPrompt}
-
-  CRITICAL REQUIREMENTS:
-  1. **ARCHITECTURE (SPA):**
-     - Create a complete website in a SINGLE HTML file.
-     - Include a Fixed/Sticky Navbar with links (Home, About, Services, Portfolio, Contact).
-     - **Navigation Logic (CRITICAL):** 
-       - Give every Section a unique ID (e.g., id="home", id="about").
-       - Give Navbar Links hrefs matching IDs (e.g., href="#home").
-       - **JavaScript:** Write robust code to handle click events on nav links. 
-         - \`e.preventDefault()\` MUST be used.
-         - Hide ALL sections (add 'hidden' class).
-         - Show TARGET section (remove 'hidden' class).
-         - Update 'active' class on navbar links.
-  
-  2. **MOBILE MENU (CRITICAL):**
-     - Navbar MUST have a button with \`id="mobile-menu-btn"\` (Hamburger icon) visible only on small screens.
-     - A Menu container with \`id="mobile-menu"\` containing the links, hidden by default.
-     - **JavaScript:** Write code to Toggle the 'hidden' class on \`#mobile-menu\` when \`#mobile-menu-btn\` is clicked.
-  
-  3. **DESIGN & VISUALS:**
-     - Use Tailwind CSS.
-     - Typography: Google Fonts '${config.designSystem?.typography.headingFont || config.font}'.
-     - Ensure High Contrast and Accessibility.
-
-  4. **CONTENT:**
-     - REALISTIC ARABIC/ENGLISH CONTENT (Based on user prompt language).
-     - Hero Section: Big bold headline, CTA buttons.
-     - Footer: Complete with links, social icons.
-
-  Return ONLY raw HTML code.
-  User Request: ${prompt}
-  `;
   parts.push({ text: systemPrompt });
 
   const attemptStream = async (modelName: string) => {
@@ -248,6 +273,8 @@ export const generateWebsiteCodeStream = async (
   };
 
   try {
+    // For Edits, sometimes Flash is faster and good enough, but Pro is safer for complex DOM logic.
+    // Let's stick to Pro for quality edits.
     const responseStream = await attemptStream('gemini-3-pro-preview');
     return {
       async *[Symbol.asyncIterator]() {

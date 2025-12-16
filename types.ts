@@ -1,4 +1,6 @@
 
+import { Attachment } from './App';
+
 export const Role = {
   USER: 'user',
   MODEL: 'model'
@@ -12,6 +14,7 @@ export interface Message {
   content: string;
   timestamp: number;
   isError?: boolean;
+  attachments?: Attachment[]; // New field for UI display
 }
 
 export const ModelType = {

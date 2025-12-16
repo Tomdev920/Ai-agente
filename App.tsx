@@ -14,13 +14,19 @@ import { VoiceAvatar } from './components/VoiceAvatar';
 import { VideoGenerator } from './components/VideoGenerator';
 import { FlutterBuilder } from './components/FlutterBuilder';
 import { VideoToCode } from './components/VideoToCode';
+import JSZip from 'jszip';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 type ViewMode = 'chat' | 'code' | 'image' | 'video' | 'website' | 'website_pro' | 'game' | 'game2d' | 'model3d' | 'voice_face' | 'flutter' | 'video_to_code';
 
-interface Attachment {
-  data: string; // Base64
+// Enhanced Attachment Interface
+export interface Attachment {
+  name: string;
+  data: string; // Base64 or Text Content
   mimeType: string;
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'pdf' | 'text' | 'zip' | 'code';
+  size?: number;
 }
 
 function App() {
@@ -41,6 +47,7 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null); // To capture full chat for PDF
   
   // Session Refs
   const chatSessionRef = useRef<Chat | null>(null);
@@ -96,24 +103,102 @@ function App() {
     }
   }, [input]);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // --- UNIVERSAL FILE HANDLER ---
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      Array.from(e.target.files).forEach((file: File) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          if (ev.target?.result) {
-            const base64 = ev.target.result as string;
-            const isVideo = file.type.startsWith('video/');
-            setAttachments(prev => [...prev, {
-              data: base64,
-              mimeType: file.type,
-              type: isVideo ? 'video' : 'image'
-            }]);
-          }
-        };
-        reader.readAsDataURL(file);
-      });
-      // Reset input so same file can be selected again
+      const files: File[] = Array.from(e.target.files);
+      
+      for (const file of files) {
+        const isImage = file.type.startsWith('image/');
+        const isVideo = file.type.startsWith('video/');
+        const isPDF = file.type === 'application/pdf';
+        const isZip = file.type === 'application/zip' || file.name.endsWith('.zip');
+        const isText = file.type.startsWith('text/') || 
+                       file.name.match(/\.(js|ts|tsx|jsx|json|html|css|py|md|txt|xml|c|cpp|java)$/i);
+
+        if (isImage || isVideo || isPDF) {
+            // Read as Base64 for Gemini InlineData
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              if (ev.target?.result) {
+                setAttachments(prev => [...prev, {
+                  name: file.name,
+                  data: ev.target!.result as string,
+                  mimeType: file.type,
+                  type: isImage ? 'image' : isVideo ? 'video' : 'pdf',
+                  size: file.size
+                }]);
+              }
+            };
+            reader.readAsDataURL(file);
+
+        } else if (isZip) {
+            // Extract ZIP Content Client-Side for Analysis
+            try {
+                const zip = new JSZip();
+                const zipContent = await zip.loadAsync(file);
+                let extractedText = `[ARCHIVE_CONTENT: ${file.name}]\n`;
+                
+                let fileCount = 0;
+                for (const [path, fileEntry] of Object.entries(zipContent.files)) {
+                    const entry: any = fileEntry;
+                    if (fileCount > 50) break; // Limit file count
+                    if (!entry.dir) {
+                        // Check if looks like text
+                        if (path.match(/\.(js|ts|tsx|jsx|json|html|css|py|md|txt|xml|c|cpp|java|config|yml)$/i)) {
+                             const content = await entry.async('string');
+                             extractedText += `\n--- START FILE: ${path} ---\n${content}\n--- END FILE ---\n`;
+                             fileCount++;
+                        }
+                    }
+                }
+                
+                setAttachments(prev => [...prev, {
+                    name: file.name,
+                    data: extractedText,
+                    mimeType: 'application/zip',
+                    type: 'zip',
+                    size: file.size
+                }]);
+
+            } catch (err) {
+                console.error("Failed to read zip", err);
+                alert("فشل قراءة الملف المضغوط. تأكد أنه غير تالف.");
+            }
+
+        } else if (isText) {
+             // Read as Text for Prompt Context
+             const reader = new FileReader();
+             reader.onload = (ev) => {
+               if (ev.target?.result) {
+                 const textContent = `[FILE_CONTENT: ${file.name}]\n${ev.target.result}`;
+                 setAttachments(prev => [...prev, {
+                   name: file.name,
+                   data: textContent,
+                   mimeType: file.type || 'text/plain',
+                   type: 'code',
+                   size: file.size
+                 }]);
+               }
+             };
+             reader.readAsText(file);
+        } else {
+             // Fallback: Try to read as text anyway, or alert
+             const reader = new FileReader();
+             reader.onload = (ev) => {
+                 setAttachments(prev => [...prev, {
+                     name: file.name,
+                     data: `[FILE_CONTENT: ${file.name}]\n${ev.target?.result}`,
+                     mimeType: 'text/plain',
+                     type: 'text',
+                     size: file.size
+                 }]);
+             }
+             reader.readAsText(file);
+        }
+      }
+      
+      // Reset input
       e.target.value = '';
     }
   };
@@ -128,8 +213,24 @@ function App() {
     const currentSession = activeView === 'code' ? codeSessionRef.current : chatSessionRef.current;
     if (!currentSession) return;
 
-    const userMessageText = input.trim();
-    const currentAttachments = [...attachments];
+    let userMessageText = input.trim();
+    
+    // Process Attachments for Gemini
+    // 1. Images/Videos/PDFs -> Go to 'inlineData' (attachments param)
+    // 2. Text/Code/Zip -> Append to 'userMessageText'
+    
+    const inlineAttachments: { data: string; mimeType: string }[] = [];
+    
+    attachments.forEach(att => {
+        if (att.type === 'image' || att.type === 'video' || att.type === 'pdf') {
+            inlineAttachments.push({ data: att.data, mimeType: att.mimeType });
+        } else {
+            // It's text/code/zip content -> Add to prompt
+            userMessageText += `\n\n${att.data}`;
+        }
+    });
+
+    const displayAttachments = [...attachments]; // Copy for UI
     
     // Clear Input
     setInput('');
@@ -137,14 +238,12 @@ function App() {
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     // Optimistic UI Update
-    const displayContent = userMessageText + 
-      (currentAttachments.length > 0 ? `\n\n*[مرفق: ${currentAttachments.length} ملفات]*` : '');
-
     const newUserMessage: Message = {
       id: Date.now().toString(),
       role: Role.USER,
-      content: displayContent,
-      timestamp: Date.now()
+      content: input.trim(), // Show original text in UI, not the appended file content to avoid clutter
+      timestamp: Date.now(),
+      attachments: displayAttachments // Store attachment metadata for UI
     };
 
     const aiPlaceholderId = (Date.now() + 1).toString();
@@ -159,7 +258,8 @@ function App() {
     setIsLoading(true);
 
     try {
-      const resultStream = await sendMessageStream(currentSession, userMessageText, currentAttachments);
+      // Send the text (which now includes file contents) + inline binaries
+      const resultStream = await sendMessageStream(currentSession, userMessageText, inlineAttachments);
       let accumulatedText = '';
       for await (const chunk of resultStream) {
         const responseChunk = chunk as GenerateContentResponse;
@@ -197,6 +297,50 @@ function App() {
       setAttachments([]);
       if (window.innerWidth < 768) setIsSidebarOpen(false);
     }
+  };
+
+  const handleExportChatToPDF = async () => {
+     if (!chatContainerRef.current) return;
+     
+     // Only allow export if there are messages
+     if (getCurrentMessages().length === 0) {
+         alert("لا يوجد محادثة لتصديرها.");
+         return;
+     }
+
+     try {
+         // Use html2canvas
+         const canvas = await html2canvas(chatContainerRef.current, {
+             backgroundColor: '#050505',
+             scale: 1, // Normal scale is fine for full page
+             useCORS: true,
+             ignoreElements: (element) => element.tagName === 'HEADER' || element.tagName === 'ASIDE' // Try to ignore floating elements if they get caught
+         });
+         
+         const imgData = canvas.toDataURL('image/png');
+         const pdf = new jsPDF({
+             orientation: 'p',
+             unit: 'mm',
+             format: 'a4'
+         });
+
+         const imgProps = pdf.getImageProperties(imgData);
+         const pdfWidth = pdf.internal.pageSize.getWidth();
+         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+         // For full chat, we might need multiple pages. 
+         // For simplicity in this demo, we create a custom page height to fit the whole chat (long receipt style)
+         // or we scale it. Let's do a long single page for best readability of code/text.
+         pdf.deletePage(1);
+         pdf.addPage([pdfWidth, pdfHeight + 20]);
+         pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, pdfHeight);
+         
+         pdf.save(`toma_chat_history_${Date.now()}.pdf`);
+
+     } catch (e) {
+         console.error("Export failed", e);
+         alert("فشل تصدير المحادثة.");
+     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -277,13 +421,22 @@ function App() {
 
           <div className="p-4 border-t border-white/5 bg-black/20">
              {(activeView === 'chat' || activeView === 'code') && (
-                 <button 
-                   onClick={handleClearCurrentChat}
-                   className="w-full flex items-center justify-center gap-2 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-all border border-transparent hover:border-red-500/20"
-                 >
-                   <Icons.Trash size={16} />
-                   <span className="text-sm font-medium">مسح الذاكرة</span>
-                 </button>
+                 <div className="flex flex-col gap-2">
+                     <button 
+                       onClick={handleExportChatToPDF}
+                       className="w-full flex items-center justify-center gap-2 px-4 py-3 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 rounded-xl transition-all border border-transparent hover:border-cyan-500/20"
+                     >
+                        <Icons.PDF size={16} />
+                        <span className="text-sm font-medium">تصدير المحادثة PDF</span>
+                     </button>
+                     <button 
+                       onClick={handleClearCurrentChat}
+                       className="w-full flex items-center justify-center gap-2 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-all border border-transparent hover:border-red-500/20"
+                     >
+                       <Icons.Trash size={16} />
+                       <span className="text-sm font-medium">مسح الذاكرة</span>
+                     </button>
+                 </div>
              )}
              <div className="mt-4 text-center">
                <p className="text-[10px] text-slate-600">تم التطوير بواسطة <span className="text-cyan-600">تامر محمد صالح</span></p>
@@ -390,14 +543,14 @@ function App() {
                     </h2>
                     <p className="text-slate-400 max-w-md text-sm leading-relaxed mb-8">
                       {activeView === 'code' 
-                        ? 'جاهز لبناء خوارزميات معقدة وأنظمة آمنة.' 
-                        : 'متصل بنواة Gemini Pro & Flash مع قدرات البحث (Grounding).'}
+                        ? 'جاهز لاستقبال ملفاتك البرمجية (ZIP, JS, PY...)، تحليلها وتطويرها.' 
+                        : 'أدعم الآن تحليل الصور، ملفات PDF، والمستندات. يمكنك إرسال ملف وسأقوم بتحليله أو تعديله.'}
                     </p>
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
                        {(activeView === 'code' 
-                         ? ['أنشئ سكريبت Python...', 'صحح مكون React...', 'اشرح خوارزمية الكم...', 'أنشئ قاعدة بيانات SQL...'] 
-                         : ['بحث في جوجل عن...', 'تحليل منطقي (Thinking)...', 'أماكن سياحية في...', 'خطة تسويق...'])
+                         ? ['قم بتحليل كود Python هذا...', 'ابحث عن الأخطاء في ملف ZIP...', 'اشرح خوارزمية الكم...', 'حول الكود إلى C++...'] 
+                         : ['لخص ملف PDF المرفق...', 'حلل الصورة المرفقة...', 'ماذا يوجد في هذا الملف؟', 'أرسل لي كود لعبة Snake...'])
                          .map((suggestion, idx) => (
                          <button 
                            key={idx}
@@ -410,7 +563,7 @@ function App() {
                     </div>
                  </div>
                ) : (
-                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
+                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar" ref={chatContainerRef}>
                    {getCurrentMessages().map((msg) => (
                      <ChatMessage key={msg.id} message={msg} />
                    ))}
@@ -424,19 +577,25 @@ function App() {
                   {attachments.length > 0 && (
                      <div className="flex gap-2 mb-2 overflow-x-auto custom-scrollbar pb-2">
                         {attachments.map((att, i) => (
-                           <div key={i} className="relative w-20 h-20 flex-shrink-0 bg-white/5 rounded-xl border border-white/10 overflow-hidden group">
-                              {att.type === 'video' ? (
-                                <div className="w-full h-full flex items-center justify-center text-slate-400">
-                                   <Icons.Video size={24} />
-                                </div>
+                           <div key={i} className="relative w-24 h-24 flex-shrink-0 bg-white/5 rounded-xl border border-white/10 overflow-hidden group flex flex-col items-center justify-center p-2 text-center">
+                              {att.type === 'image' ? (
+                                <img src={att.data} alt="att" className="absolute inset-0 w-full h-full object-cover opacity-60" />
+                              ) : att.type === 'video' ? (
+                                <div className="text-slate-400"><Icons.Video size={24} /></div>
+                              ) : att.type === 'pdf' ? (
+                                <div className="text-red-400"><Icons.PDF size={24} /></div>
+                              ) : att.type === 'zip' ? (
+                                <div className="text-yellow-400"><Icons.Zip size={24} /></div>
                               ) : (
-                                <img src={att.data} alt="att" className="w-full h-full object-cover" />
+                                <div className="text-blue-400"><Icons.Code size={24} /></div>
                               )}
+                              
+                              <span className="relative z-10 text-[8px] text-white font-mono mt-1 truncate w-full px-1 bg-black/50 rounded">{att.name}</span>
                               <button 
                                 onClick={() => removeAttachment(i)}
-                                className="absolute top-1 right-1 text-red-400 hover:text-red-300 bg-black/60 rounded-full"
+                                className="absolute top-1 right-1 text-red-400 hover:text-red-300 bg-black/80 rounded-full z-20 p-0.5"
                               >
-                                 <Icons.Remove size={16} />
+                                 <Icons.Remove size={12} />
                               </button>
                            </div>
                         ))}
@@ -446,17 +605,19 @@ function App() {
                   <div className="max-w-4xl mx-auto relative glass-panel rounded-2xl flex items-end gap-2 p-2 focus-within:ring-1 focus-within:ring-cyan-500/50 transition-all">
                      <button
                        onClick={() => fileInputRef.current?.click()}
-                       className="p-3 text-slate-400 hover:text-cyan-400 hover:bg-white/5 rounded-xl transition-all flex-shrink-0"
-                       title="إرفاق صورة/فيديو"
+                       className="p-3 text-slate-400 hover:text-cyan-400 hover:bg-white/5 rounded-xl transition-all flex-shrink-0 group relative"
+                       title="إرفاق ملفات (صور، فيديو، PDF، كود، ZIP)"
                      >
                         <Icons.Paperclip size={20} />
+                        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 text-[9px] bg-black border border-white/10 px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                            PDF, ZIP, Code, Media
+                        </span>
                      </button>
                      <input 
                        type="file" 
                        ref={fileInputRef} 
                        hidden 
                        multiple 
-                       accept="image/*,video/*"
                        onChange={handleFileSelect}
                      />
 
@@ -465,7 +626,7 @@ function App() {
                        value={input}
                        onChange={(e) => setInput(e.target.value)}
                        onKeyDown={handleKeyDown}
-                       placeholder={activeView === 'code' ? "// أدخل الأمر..." : "اكتب رسالة..."}
+                       placeholder={activeView === 'code' ? "// أدخل الأمر أو ارفع ملف للكود..." : "اكتب رسالة أو ارفع ملف (PDF, ZIP, صور)..."}
                        className="flex-1 max-h-48 bg-transparent border-none focus:ring-0 p-3 text-white placeholder-slate-500 resize-none text-base leading-relaxed font-sans text-right"
                        dir="auto"
                        rows={1}

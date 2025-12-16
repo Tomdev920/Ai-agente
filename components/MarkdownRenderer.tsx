@@ -17,6 +17,28 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  const handleDownload = (code: string, lang: string) => {
+      // Create blob and download
+      const extMap: Record<string, string> = {
+          javascript: 'js', js: 'js', typescript: 'ts', ts: 'ts',
+          python: 'py', py: 'py', html: 'html', css: 'css',
+          json: 'json', java: 'java', cpp: 'cpp', c: 'c',
+          bash: 'sh', shell: 'sh', markdown: 'md'
+      };
+      const ext = extMap[lang.toLowerCase()] || 'txt';
+      const filename = `toma_generated_${Date.now()}.${ext}`;
+      
+      const blob = new Blob([code], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="prose prose-invert max-w-none break-words text-sm sm:text-base leading-relaxed" dir="auto">
       <ReactMarkdown
@@ -36,6 +58,16 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
                  <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
                     <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">{match?.[1] || 'TEXT'}</span>
                     <div className="flex items-center gap-3">
+                      {/* Download Button (AI Sending File Feature) */}
+                      <button 
+                        onClick={() => handleDownload(codeString, match?.[1] || 'txt')}
+                        className="text-slate-400 hover:text-green-400 transition-colors flex items-center gap-1.5"
+                        title="Download as File"
+                      >
+                         <Icons.Download size={14} />
+                         <span className="text-[10px] font-mono opacity-0 group-hover:opacity-100 transition-opacity">DL</span>
+                      </button>
+
                       <button 
                         onClick={() => handleCopy(codeString, renderIndex)}
                         className="text-slate-400 hover:text-cyan-400 transition-colors flex items-center gap-1.5"

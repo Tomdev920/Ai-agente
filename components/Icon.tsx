@@ -51,7 +51,8 @@ import {
   ClipboardList,
   LayoutTemplate,
   Plus,
-  ScanEye
+  ScanEye,
+  FileText
 } from 'lucide-react';
 
 export const Icons = {
@@ -99,6 +100,7 @@ export const Icons = {
   Remove: XCircle,
   Folder,
   File: FileCode,
+  PDF: FileText,
   Database,
   Terminal,
   Save,

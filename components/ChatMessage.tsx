@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Message, Role } from '../types';
 import { Icons } from './Icon';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { Attachment } from '../App';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 interface ChatMessageProps {
   message: Message;
@@ -14,7 +17,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
   
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
   const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
+  
+  // Ref for the content bubble to capture as PDF
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Cleanup on unmount
@@ -68,6 +75,78 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
     }
   };
 
+  const handleDownloadPDF = async () => {
+      if (!contentRef.current || isPdfLoading) return;
+      setIsPdfLoading(true);
+
+      try {
+          // Use html2canvas to capture the element exactly as rendered (preserving Arabic fonts)
+          const canvas = await html2canvas(contentRef.current, {
+              backgroundColor: '#1e1e1e', // Match theme background
+              scale: 2, // High resolution
+              useCORS: true,
+              logging: false
+          });
+
+          const imgData = canvas.toDataURL('image/png');
+          const pdf = new jsPDF({
+              orientation: 'p',
+              unit: 'mm',
+              format: 'a4'
+          });
+
+          const imgProps = pdf.getImageProperties(imgData);
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+          // Add image to PDF. If it's longer than a page, simple scaling for now
+          // (For very long messages, multi-page splitting is complex, we fit to width)
+          if (pdfHeight > pdf.internal.pageSize.getHeight()) {
+              // Add multiple pages if needed logic or just fit
+              // Simple approach: One long page or fit to one page (scaling)
+              // Here we just add it, user can zoom. Or we can set page height to fit.
+              // Let's resize the page to fit content for a "Receipt" style PDF
+              pdf.deletePage(1);
+              pdf.addPage([pdfWidth, pdfHeight + 20]);
+              pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, pdfHeight);
+          } else {
+              pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, pdfHeight);
+          }
+
+          pdf.save(`toma_chat_${Date.now()}.pdf`);
+
+      } catch (err) {
+          console.error("PDF Generation failed", err);
+          alert("فشل إنشاء ملف PDF. حاول مرة أخرى.");
+      } finally {
+          setIsPdfLoading(false);
+      }
+  };
+
+  // Helper to render user attachments nicely
+  const renderAttachments = (attachments?: Attachment[]) => {
+      if (!attachments || attachments.length === 0) return null;
+      return (
+          <div className="flex flex-wrap gap-2 mb-3">
+              {attachments.map((att, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 border border-white/10 max-w-[200px]">
+                      <div className="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded bg-white/5 text-slate-300">
+                          {att.type === 'image' ? <Icons.Image size={16} /> :
+                           att.type === 'video' ? <Icons.Video size={16} /> :
+                           att.type === 'pdf' ? <Icons.PDF size={16} className="text-red-400"/> :
+                           att.type === 'zip' ? <Icons.Zip size={16} className="text-yellow-400"/> :
+                           <Icons.Code size={16} className="text-blue-400"/>}
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                          <span className="text-[10px] font-bold text-white truncate">{att.name}</span>
+                          <span className="text-[8px] text-slate-500 font-mono uppercase">{att.type}</span>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      );
+  };
+
   return (
     <div className={`flex w-full gap-4 animate-fadeIn group ${isUser ? 'justify-start' : 'flex-row-reverse justify-start'}`}>
       <div 
@@ -90,7 +169,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
         </div>
 
         <div 
-          className={`relative px-5 py-4 rounded-2xl backdrop-blur-md border transition-all duration-300 w-fit group/bubble
+          className={`relative px-5 py-4 rounded-2xl backdrop-blur-md border transition-all duration-300 w-fit group/bubble min-w-[120px]
             ${isUser 
               ? 'bg-white/5 border-white/5 text-slate-200 rounded-tr-none hover:bg-white/10' 
               : 'bg-black/40 border-cyan-500/20 text-slate-100 rounded-tl-none shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:border-cyan-500/40'}`}
@@ -110,7 +189,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
              </div>
           ) : (
              <>
-               <MarkdownRenderer content={message.content} />
+               {isUser && renderAttachments(message.attachments as Attachment[])}
+               
+               <div ref={contentRef} className="p-1 rounded">
+                   <MarkdownRenderer content={message.content} />
+               </div>
                
                {/* Actions Toolbar */}
                <div className={`mt-2 pt-2 border-t border-white/5 flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} opacity-0 group-hover/bubble:opacity-100 transition-opacity`}>
@@ -132,6 +215,20 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                         </>
                      )}
                   </button>
+
+                  {/* PDF Download Button (New) */}
+                  {!isUser && (
+                      <button
+                        onClick={handleDownloadPDF}
+                        disabled={isPdfLoading}
+                        className={`p-1.5 rounded-lg transition-all flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider
+                          ${isPdfLoading ? 'bg-white/5 text-slate-500' : 'bg-white/5 text-slate-400 hover:text-red-400 hover:bg-white/10'}`}
+                        title="تحميل كملف PDF"
+                      >
+                         {isPdfLoading ? <Icons.Loader size={12} className="animate-spin" /> : <Icons.PDF size={12} />}
+                         <span>PDF</span>
+                      </button>
+                  )}
 
                   {/* TTS Button */}
                   <button 

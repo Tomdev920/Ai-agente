@@ -16,7 +16,9 @@
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.0",
     "three": "0.161.0",
-    "jszip": "3.10.1"
+    "jszip": "3.10.1",
+    "html2canvas": "1.4.1",
+    "jspdf": "2.5.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
