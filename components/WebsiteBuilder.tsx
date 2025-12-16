@@ -3,13 +3,87 @@ import { generateWebsiteCodeStream, cleanCodeResponse, generateDesignSystem, Des
 import { Icons } from './Icon';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { GlassyLoader } from './GlassyLoader';
 import JSZip from 'jszip';
 
 // Options Constants
 const FONTS = ['Cairo', 'Tajawal', 'Inter', 'Roboto', 'Open Sans', 'Lato'];
 const LIBRARIES = ['FontAwesome', 'AOS (Scroll Anim)', 'GSAP (Advanced Anim)', 'Chart.js', 'Three.js', 'Swiper.js'];
 const FRAMEWORKS = ['tailwind', 'bootstrap', 'css'];
+
+// AI Agent Avatar Component
+const AgentOverlay: React.FC<{ 
+  role: 'designer' | 'developer' | 'manager'; 
+  status: string; 
+  progress: number;
+}> = ({ role, status, progress }) => {
+    
+    // Using Robohash Set 2 (Monsters/Dragons) and Set 4 (Kittens) for cute avatars
+    // Designer = Creative Dragon (Set 2)
+    // Developer = Tech Penguin/Cat (Set 4)
+    const avatarUrl = role === 'designer' 
+        ? "https://robohash.org/creative_dragon_artist?set=set2&size=300x300&bgset=bg1" // Dragon/Monster
+        : role === 'developer'
+        ? "https://robohash.org/tech_penguin_coder?set=set4&size=300x300&bgset=bg1" // Cat/Penguin style
+        : "https://robohash.org/manager_owl?set=set1&size=300x300&bgset=bg1"; // Robot Manager
+
+    const roleName = role === 'designer' ? "المصمم المبدع (Pixel)" : "المهندس البرمجي (Codey)";
+    const roleColor = role === 'designer' ? "text-purple-400" : "text-cyan-400";
+    const bgColor = role === 'designer' ? "bg-purple-600" : "bg-cyan-600";
+    const gradient = role === 'designer' ? "from-purple-600 to-pink-600" : "from-cyan-600 to-blue-600";
+
+    return (
+        <div className="absolute inset-0 z-50 bg-[#09090b]/90 backdrop-blur-xl flex flex-col items-center justify-center p-8 animate-fadeIn">
+            
+            {/* Avatar Circle with Glow */}
+            <div className="relative mb-8 group">
+                <div className={`absolute inset-0 rounded-full bg-gradient-to-tr ${gradient} blur-2xl opacity-40 animate-pulse`}></div>
+                <div className={`relative w-40 h-40 rounded-full border-4 border-white/10 bg-black/40 overflow-hidden shadow-2xl flex items-center justify-center`}>
+                     <img 
+                        src={avatarUrl} 
+                        alt={role} 
+                        className="w-full h-full object-cover animate-float"
+                     />
+                </div>
+                {/* Badge */}
+                <div className={`absolute -bottom-2 -right-2 px-4 py-1 rounded-full ${bgColor} text-white text-xs font-bold border border-white/20 shadow-lg`}>
+                    {role === 'designer' ? <Icons.Palette size={14} className="inline mr-1"/> : <Icons.Cpu size={14} className="inline mr-1"/>}
+                    {role === 'designer' ? 'DESIGNER' : 'DEV'}
+                </div>
+            </div>
+
+            {/* Status Card */}
+            <div className="w-full max-w-md bg-black/40 border border-white/10 rounded-2xl p-6 backdrop-blur-md shadow-2xl">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className={`text-lg font-bold ${roleColor}`}>{roleName}</h3>
+                    <span className="text-[10px] font-mono text-slate-500 animate-pulse">LIVE CONNECT</span>
+                </div>
+                
+                <div className="bg-white/5 rounded-xl p-4 mb-4 border border-white/5 flex items-start gap-3">
+                    <div className="mt-1 w-2 h-2 rounded-full bg-green-500 animate-ping"></div>
+                    <p className="text-sm text-slate-200 leading-relaxed font-light">
+                        "{status}"
+                    </p>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                        <span>TASK_PROGRESS</span>
+                        <span>{Math.round(progress)}%</span>
+                    </div>
+                    <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                        <div 
+                            className={`h-full bg-gradient-to-r ${gradient} transition-all duration-300 relative`}
+                            style={{ width: `${progress}%` }}
+                        >
+                            <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export const WebsiteBuilder: React.FC = () => {
   const [prompt, setPrompt] = useState('');
@@ -23,12 +97,17 @@ export const WebsiteBuilder: React.FC = () => {
   // Design System State
   const [designSystem, setDesignSystem] = useState<DesignSystem | null>(null);
   
+  // Agent State
+  const [activeAgent, setActiveAgent] = useState<{
+      role: 'designer' | 'developer' | 'manager';
+      status: string;
+  } | null>(null);
+
   const [status, setStatus] = useState<'idle' | 'designing' | 'building' | 'complete'>('idle');
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'preview' | 'code'>('preview');
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
-  const [isEditMode, setIsEditMode] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   
   const codeContainerRef = useRef<HTMLDivElement>(null);
@@ -59,25 +138,44 @@ export const WebsiteBuilder: React.FC = () => {
     setProgress(0);
     setDesignSystem(null);
     
+    // 1. Activate Designer Agent
+    setActiveAgent({ 
+        role: 'designer', 
+        status: 'جاري تحليل الفكرة واختيار الألوان المناسبة...' 
+    });
+
     try {
       // 1. Design Phase
       addLog("Initializing Graphic Designer AI...", 'design');
-      let currentDesign: DesignSystem | undefined;
       
       let p = 0;
-      const dInterval = setInterval(() => { p+=10; if(p>90) p=90; setProgress(p); }, 200);
+      const dInterval = setInterval(() => { 
+          p+=5; 
+          if(p>90) p=90; 
+          setProgress(p); 
+          if(p === 30) setActiveAgent(prev => ({...prev!, status: 'اختيار الخطوط والمسافات...'}));
+          if(p === 60) setActiveAgent(prev => ({...prev!, status: 'رسم التخطيط المبدئي (Wireframe)...'}));
+      }, 100);
 
-      addLog(`Analyzing request...`, 'design');
-      currentDesign = await generateDesignSystem(prompt);
-      addLog(`Palette: ${currentDesign.colorPalette.primary}`, 'design');
+      const currentDesign = await generateDesignSystem(prompt);
       
       clearInterval(dInterval);
-      setDesignSystem(currentDesign || null);
       setProgress(100);
+      setDesignSystem(currentDesign || null);
+      addLog(`Palette: ${currentDesign.colorPalette.primary}`, 'design');
+      
+      // Short pause for transition
+      setActiveAgent(prev => ({...prev!, status: 'تم الانتهاء من التصميم! تسليم المهمة للمطور...'}));
+      await new Promise(r => setTimeout(r, 1500));
 
-      // 2. Build Phase
+      // 2. Build Phase - Activate Developer Agent
       setStatus('building');
       setViewMode('code');
+      setActiveAgent({ 
+          role: 'developer', 
+          status: 'استلمت التصميم. جاري كتابة كود الهيكل (HTML)...' 
+      });
+      setProgress(0);
       addLog("Handing off to Frontend Engineer...", 'info');
       
       const config = { 
@@ -100,19 +198,36 @@ export const WebsiteBuilder: React.FC = () => {
         if(prog > 95) prog = 95;
         setProgress(prog);
 
-        if (chunk.includes('<nav') && !logs.some(l=>l.includes('Navbar'))) addLog("Building Navigation...", 'ai');
-        if (chunk.includes('script') && !logs.some(l=>l.includes('Logic'))) addLog("Writing Logic...", 'ai');
+        // Dynamic Status Updates for Dev
+        if (chunk.includes('<nav') && !logs.some(l=>l.includes('Navbar'))) {
+            setActiveAgent(prev => ({...prev!, status: 'بناء شريط التنقل والقوائم...'}));
+            addLog("Building Navigation...", 'ai');
+        }
+        if (chunk.includes('<footer') && !logs.some(l=>l.includes('Footer'))) {
+             setActiveAgent(prev => ({...prev!, status: 'تجهيز الفوتر والروابط...'}));
+        }
+        if (chunk.includes('script') && !logs.some(l=>l.includes('Logic'))) {
+            setActiveAgent(prev => ({...prev!, status: 'كتابة منطق الجافاسكريبت والتفاعلات...'}));
+            addLog("Writing Logic...", 'ai');
+        }
       }
 
       setGeneratedCode(cleanCodeResponse(accumulatedCode));
-      setStatus('complete');
+      
+      // Final Touch
+      setActiveAgent(prev => ({...prev!, status: 'مراجعة الكود وتشغيل الموقع...'}));
       setProgress(100);
+      await new Promise(r => setTimeout(r, 1000));
+
+      setStatus('complete');
+      setActiveAgent(null); // Hide Agent
       addLog("Deployed Successfully.", 'success');
       setViewMode('preview');
 
     } catch (err: any) {
       addLog(`Critical Error: ${err.message}`, 'error');
       setStatus('idle');
+      setActiveAgent(null);
     }
   };
 
@@ -120,27 +235,57 @@ export const WebsiteBuilder: React.FC = () => {
       if (!generatedCode) return;
       
       const zip = new JSZip();
-      let htmlContent = generatedCode;
       
-      // Extract Base64 Images and save to assets folder
-      let imgCount = 0;
-      const assetsFolder = zip.folder("assets");
+      // --- FOLDER 1: Single File Standalone (With Base64 Images) ---
+      const singleFileFolder = zip.folder("single_file");
+      if (singleFileFolder) {
+          singleFileFolder.file("index.html", generatedCode);
+          singleFileFolder.file("README.txt", "هذا المجلد يحتوي على ملف واحد فقط يعمل بشكل مستقل تماماً.");
+      }
       
-      // Replace base64 src with local paths
-      // This Regex looks for src="data:image/..."
-      htmlContent = htmlContent.replace(/src=["']data:image\/([a-zA-Z]+);base64,([^"']+)["']/g, (match, ext, data) => {
-          imgCount++;
-          const filename = `image_${imgCount}.${ext}`;
-          if(assetsFolder) assetsFolder.file(filename, data, {base64: true});
-          return `src="./assets/${filename}"`;
-      });
+      // --- FOLDER 2: Source Code (Separated Files & Assets) ---
+      const sourceFolder = zip.folder("source_code");
+      if (sourceFolder) {
+          let htmlContent = generatedCode;
+          let cssContent = "";
+          let jsContent = "";
+          
+          // 1. Extract CSS
+          const cssMatch = htmlContent.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+          if (cssMatch && cssMatch[1]) {
+              cssContent = cssMatch[1];
+              // Remove style tag from HTML and add link
+              htmlContent = htmlContent.replace(cssMatch[0], '<link rel="stylesheet" href="./css/style.css">');
+          }
 
-      // Add index.html
-      zip.file("index.html", htmlContent);
-      
-      // Add Style/CSS file if needed (extracting style tag)
-      // For now, we keep it inline for simplicity, but we add a README
-      zip.file("README.md", `# Project Generated by Toma Ai\n\n1. Extract all files.\n2. Open index.html in your browser.\n3. Images are located in the 'assets' folder.`);
+          // 2. Extract JS
+          // We need to be careful to extract the main logic script, not CDN scripts
+          // Usually the generated code has one main script tag at the end
+          const jsMatch = htmlContent.match(/<script>(?![\s\S]*src=)([\s\S]*?)<\/script>/i);
+          if (jsMatch && jsMatch[1]) {
+               jsContent = jsMatch[1];
+               htmlContent = htmlContent.replace(jsMatch[0], '<script src="./js/script.js"></script>');
+          }
+
+          // 3. Extract Images & Replace Paths
+          const assetsFolder = sourceFolder.folder("assets");
+          const cssFolder = sourceFolder.folder("css");
+          const jsFolder = sourceFolder.folder("js");
+          
+          let imgCount = 0;
+          htmlContent = htmlContent.replace(/src=["']data:image\/([a-zA-Z]+);base64,([^"']+)["']/g, (match, ext, data) => {
+              imgCount++;
+              const filename = `image_${imgCount}.${ext}`;
+              if (assetsFolder) assetsFolder.file(filename, data, {base64: true});
+              return `src="./assets/${filename}"`;
+          });
+
+          // Write Files
+          sourceFolder.file("index.html", htmlContent);
+          if (cssFolder) cssFolder.file("style.css", cssContent);
+          if (jsFolder) jsFolder.file("script.js", jsContent);
+          sourceFolder.file("README.md", `# Project Generated by Toma Ai\n\n- index.html: الهيكل الرئيسي\n- css/style.css: ملف التنسيق\n- js/script.js: ملف الجافاسكريبت\n- assets/: الصور والمرفقات`);
+      }
 
       // Generate ZIP
       const content = await zip.generateAsync({type:"blob"});
@@ -149,7 +294,7 @@ export const WebsiteBuilder: React.FC = () => {
       link.download = "toma_website_project.zip";
       link.click();
       
-      addLog("Project ZIP downloaded successfully.", 'success');
+      addLog("Project ZIP downloaded successfully (Dual Format).", 'success');
   };
 
   const getPreviewCode = () => {
@@ -271,7 +416,7 @@ export const WebsiteBuilder: React.FC = () => {
                         className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${status !== 'idle' && status !== 'complete' ? 'bg-white/5 text-slate-500' : 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg'}`}
                     >
                          {status !== 'idle' && status !== 'complete' ? <Icons.Loader size={16} className="animate-spin"/> : <Icons.Play size={16} />}
-                         {status === 'designing' ? 'Designing...' : status === 'building' ? 'Building...' : 'Generate Website'}
+                         {status === 'designing' || status === 'building' ? 'Working...' : 'Generate Website'}
                     </button>
 
                     {/* Logs Area (Replaces Terminal) */}
@@ -294,10 +439,13 @@ export const WebsiteBuilder: React.FC = () => {
             {/* Main Content */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#1e1e1e] relative">
                 
-                {status === 'designing' && (
-                     <div className="absolute inset-0 z-20 bg-black/80 backdrop-blur-sm flex items-center justify-center">
-                         <GlassyLoader text="Graphic Designer AI is creating the Design System..." progress={progress} showSteps />
-                     </div>
+                {/* AI AGENT OVERLAY */}
+                {activeAgent && (
+                     <AgentOverlay 
+                        role={activeAgent.role} 
+                        status={activeAgent.status} 
+                        progress={progress} 
+                     />
                 )}
 
                 {viewMode === 'preview' ? (

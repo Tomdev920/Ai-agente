@@ -211,36 +211,44 @@ export const generateWebsiteCodeStream = async (
   1. **ARCHITECTURE (SPA):**
      - Create a complete website in a SINGLE HTML file.
      - Include a Fixed/Sticky Navbar with links (Home, About, Services, Portfolio, Contact).
-     - **JavaScript Navigation:** Write script to handle clicking nav links -> Add 'active' class to link -> Hide all sections -> FadeIn target section.
-     - Default view: Home section visible, others hidden.
+     - **Navigation Logic (CRITICAL):** 
+       - Give every Section a unique ID (e.g., id="home", id="about").
+       - Give Navbar Links hrefs matching IDs (e.g., href="#home").
+       - **JavaScript:** Write robust code to handle click events on nav links. 
+         - \`e.preventDefault()\` MUST be used.
+         - Hide ALL sections (add 'hidden' class).
+         - Show TARGET section (remove 'hidden' class).
+         - Update 'active' class on navbar links.
   
-  2. **DESIGN & VISUALS (Graphic Design):**
-     - Use Tailwind CSS for advanced styling.
-     - If style is 'Glassmorphism': Use backdrop-blur, semi-transparent backgrounds, borders.
-     - If style is 'Cyberpunk': Use neon glows, dark bg, glitch effects.
-     - **Bento Grid:** For features/services, use a grid layout (col-span-2, row-span-2).
-     - **Typography:** Use Google Fonts '${config.designSystem?.typography.headingFont || config.font}' for headings.
+  2. **MOBILE MENU (CRITICAL):**
+     - Navbar MUST have a button with \`id="mobile-menu-btn"\` (Hamburger icon) visible only on small screens.
+     - A Menu container with \`id="mobile-menu"\` containing the links, hidden by default.
+     - **JavaScript:** Write code to Toggle the 'hidden' class on \`#mobile-menu\` when \`#mobile-menu-btn\` is clicked.
+  
+  3. **DESIGN & VISUALS:**
+     - Use Tailwind CSS.
+     - Typography: Google Fonts '${config.designSystem?.typography.headingFont || config.font}'.
+     - Ensure High Contrast and Accessibility.
 
-  3. **CONTENT:**
+  4. **CONTENT:**
      - REALISTIC ARABIC/ENGLISH CONTENT (Based on user prompt language).
-     - Hero Section: Big bold headline, CTA buttons, maybe a 3D effect or gradient blob background.
-     - Footer: Complete with links, social icons, newsletter.
-
-  4. **LIBRARIES:**
-     - Use FontAwesome (CDN) for icons.
-     - Use AOS (Animate On Scroll) for scroll animations if requested.
-     - Use GSAP if complex animations needed.
+     - Hero Section: Big bold headline, CTA buttons.
+     - Footer: Complete with links, social icons.
 
   Return ONLY raw HTML code.
   User Request: ${prompt}
   `;
   parts.push({ text: systemPrompt });
 
-  try {
-    const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-3-pro-preview', // Force Pro for better coding
+  const attemptStream = async (modelName: string) => {
+      return await ai.models.generateContentStream({
+        model: modelName, 
         contents: { parts: parts },
-    });
+      });
+  };
+
+  try {
+    const responseStream = await attemptStream('gemini-3-pro-preview');
     return {
       async *[Symbol.asyncIterator]() {
         for await (const chunk of responseStream) {
@@ -249,8 +257,20 @@ export const generateWebsiteCodeStream = async (
       }
     };
   } catch (error) {
-    console.error("Website stream error:", error);
-    throw error;
+    console.warn("Pro model failed, falling back to Flash...", error);
+    try {
+        const responseStream = await attemptStream('gemini-2.5-flash');
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const chunk of responseStream) {
+              if (chunk.text) yield chunk.text;
+            }
+          }
+        };
+    } catch (retryError) {
+        console.error("Website stream error:", retryError);
+        throw retryError;
+    }
   }
 };
 
@@ -433,19 +453,32 @@ export const generateCodeFromPlan = async (plan: ReverseEngineeringPlan): Promis
     Return ONLY raw HTML code.
     `;
 
-    try {
-        const responseStream = await ai.models.generateContentStream({
-            model: 'gemini-3-pro-preview',
+    const attemptStream = async (modelName: string) => {
+        return await ai.models.generateContentStream({
+            model: modelName,
             contents: { parts: [{ text: prompt }] }
         });
-        
+    };
+
+    try {
+        const responseStream = await attemptStream('gemini-3-pro-preview');
         let fullCode = "";
         for await (const chunk of responseStream) {
             if (chunk.text) fullCode += chunk.text;
         }
         return cleanCodeResponse(fullCode);
     } catch (e) {
-        console.error("Coding failed", e);
-        throw e;
+        console.warn("Pro coding failed, retrying with Flash...", e);
+        try {
+            const responseStream = await attemptStream('gemini-2.5-flash');
+            let fullCode = "";
+            for await (const chunk of responseStream) {
+                if (chunk.text) fullCode += chunk.text;
+            }
+            return cleanCodeResponse(fullCode);
+        } catch (retryError) {
+             console.error("Coding failed", retryError);
+             throw retryError;
+        }
     }
 };
