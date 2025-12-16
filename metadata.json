@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Toma Ai",
+  "description": "تطبيق Toma Ai الذكي للمحادثة والبرمجة وإنشاء الصور",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
